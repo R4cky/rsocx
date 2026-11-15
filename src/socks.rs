@@ -5,6 +5,31 @@ use tokio::{net::TcpStream, io::{AsyncWriteExt, AsyncReadExt}};
 
 use crate::utils::makeword;
 
+const SOCKS_VERSION: u8 = 0x05;
+const NO_AUTH: u8 = 0x00;
+
+async fn negotiate(stream: &mut TcpStream) -> Result<()> {
+	let mut header = [0u8; 2];
+	stream.read_exact(&mut header).await?;
+
+	if header[0] != SOCKS_VERSION {
+		return Err(Error::new(
+			ErrorKind::InvalidData,
+			format!("not support protocol version {}", header[0]),
+		));
+	}
+
+	let mut methods = vec![0u8; header[1] as usize].into_boxed_slice();
+	stream.read_exact(&mut methods).await?;
+
+	if !methods.contains(&NO_AUTH) {
+		stream.write_all(&[SOCKS_VERSION, 0xff]).await?;
+		return Err(Error::new(ErrorKind::PermissionDenied, "just support no auth"));
+	}
+
+	stream.write_all(&[SOCKS_VERSION, NO_AUTH]).await
+}
+
 #[derive(Debug, Clone)]
 pub enum Addr {
 	V4([u8; 4]),
@@ -143,29 +168,7 @@ async fn tcp_transfer(stream : &mut TcpStream , addr : &Addr, address : &String 
 
 pub async fn socksv5_handle(mut stream: TcpStream) {
 	loop {
-		let mut header = [0u8 ; 2];
-		if let Err(e) = stream.read_exact(&mut header).await{
-			log::error!("error : {}" , e);
-			break;
-		};
-		
-		if header[0] != 5 {
-			log::error!("not support protocol version {}" , header[0]);
-			break;
-		}
-	
-		let mut methods = vec![0u8; header[1] as usize].into_boxed_slice();
-		if let Err(e) = stream.read_exact(&mut methods).await{
-			log::error!("error : {}" , e);
-			break;
-		};
-	
-		if !methods.contains(&0u8) {
-			log::error!("just support no auth");
-			break;
-		}
-	
-		if let Err(e) = stream.write_all(&[5, 0]).await{
+		if let Err(e) = negotiate(&mut stream).await {
 			log::error!("error : {}" , e);
 			break;
 		};
@@ -249,3 +252,6 @@ pub async fn socksv5_handle(mut stream: TcpStream) {
 		break;
 	}
 }
+
+#[cfg(test)]
+mod tests;
